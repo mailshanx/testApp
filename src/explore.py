@@ -11,6 +11,7 @@ from nltk.stem import PorterStemmer
 from nltk.stem.porter import PorterStemmer
 import subprocess
 import pickle
+from collections import deque
 
 prod_line_re=re.compile(r"^\s+\".*\",$", re.IGNORECASE)
 au_tag_re=re.compile(r"^\"AU\",$", re.IGNORECASE)
@@ -58,30 +59,40 @@ def getStemmedProdLine(line):
     pass
 
 def gen_postings_list():
-    input=raw_input("are you sure you want to generate the postings list again???")
-    if input=='yes':
+#    input=raw_input("are you sure you want to generate the postings list again???")
+    if 'yes'=='yes':
         term_docID_sorted_file=open('term_docID_sorted.txt','r')
         products_postings_file=open('products_postings.pkl','wb')
         postings_dict={}
         iteration=0
+        cached_lines=deque([])
         while 1:
-            lines=term_docID_sorted_file.readlines(10000000) #read 10 Megs at a time
+            lines=term_docID_sorted_file.readlines(100000000) #read 10 Megs at a time
             if not lines:
                 break
             current_term=lines[0].split()[0]
             docID_list=[]
-            for line in lines:
+            cached_lines.append(current_term)
+            print "no of lines read in = ", len(lines), "iteration = ", iteration
+            for lineNo, line in enumerate(lines):                
                 (term, docID)=(line.split()[0], line.split()[1])
                 if current_term!=term:
-                #update postings_dict
-                    if current_term in postings_dict.keys():
+                    if len(cached_lines)>5000:
+                        current_term_in_dict=(current_term in cached_lines)
+                        cached_lines.popleft()
+                    else:
+                        current_term_in_dict=(current_term in postings_dict.keys())
+                    #update postings_dict
+                    if current_term_in_dict:
+#                        print "found repeated term ",current_term
                         postings=postings_dict[current_term]
                         map(postings.append, docID_list)
                         postings_dict[current_term]=postings
     #                    raise Exception(term, " exists in postings_dict.keys(). something is wrong")
                     else:                    
                         postings_dict[current_term]=docID_list
-    #                print "current_term = ", current_term, " postings : ", postings_dict[current_term]
+                        cached_lines.append(current_term)
+#                    print "current_term = ", current_term, " postings : ", postings_dict[current_term]
                     #reset current_term, docID_list
                     current_term=term
                     docID_list=[]
@@ -89,6 +100,8 @@ def gen_postings_list():
                 else:
                     docID_list.append(docID)
     #                print "current_term : ", current_term, " docID : ", docID
+                if lineNo%50000==0:
+                    print "processed lineNo ", lineNo, ", len(cached_lines) = ", len(cached_lines), ", len(postings_dict) = ", len(postings_dict)
             print "still alive! iteration = ", iteration
             print "len(postings_dict) = ", len(postings_dict)
             iteration+=1 
@@ -122,7 +135,8 @@ def gen_human_readable_training_data():
 if __name__ == '__main__':
     os.chdir('/home/shankar/Downloads/TrainingSet')
     cwd=os.getcwd()
-    gen_human_readable_training_data()
+#    gen_human_readable_training_data()
+    gen_postings_list()
     os.chdir(cwd)
 
 
