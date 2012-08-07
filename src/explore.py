@@ -58,54 +58,39 @@ def getStemmedProdLine(line):
         return stemmed_prod_line
     pass
 
-def gen_postings_list():
-#    input=raw_input("are you sure you want to generate the postings list again???")
+
+def gen_postings_list_from_big_file_sort():
+    '''
+    generate the file term_docID_big_file_sorted.txt from this command:
+    python BigFileSorting -b 8000000 -k "str(line.split()[0])" term_docID_sorted.txt term_docID_big_file_sorted.txt
+    Once you have term_docID_big_file_sorted.txt, this function can generate a postings list. Each line consists of 
+    term's frequency, term, followed by docIDs.
+    Once you have the postings list, you can sort them by term frequency by:
+    python BigFileSorting -b 8000000 -k "-1*int(line.split(\":\")[0]) products_postings.txt postings_sorted_by_freq.txt"
+    '''
     if 'yes'=='yes':
-        term_docID_sorted_file=open('term_docID_sorted.txt','r')
-        products_postings_file=open('products_postings.pkl','wb')
-        postings_dict={}
+        term_docID_sorted_file=open('term_docID_big_file_sorted.txt','r')
+        products_postings_file=open('products_postings.txt','w')
         iteration=0
-        cached_lines=deque([])
         while 1:
             lines=term_docID_sorted_file.readlines(100000000) #read 10 Megs at a time
             if not lines:
                 break
             current_term=lines[0].split()[0]
             docID_list=[]
-            cached_lines.append(current_term)
             print "no of lines read in = ", len(lines), "iteration = ", iteration
             for lineNo, line in enumerate(lines):                
                 (term, docID)=(line.split()[0], line.split()[1])
                 if current_term!=term:
-                    if len(cached_lines)>5000:
-                        current_term_in_dict=(current_term in cached_lines)
-                        cached_lines.popleft()
-                    else:
-                        current_term_in_dict=(current_term in postings_dict.keys())
-                    #update postings_dict
-                    if current_term_in_dict:
-#                        print "found repeated term ",current_term
-                        postings=postings_dict[current_term]
-                        map(postings.append, docID_list)
-                        postings_dict[current_term]=postings
-    #                    raise Exception(term, " exists in postings_dict.keys(). something is wrong")
-                    else:                    
-                        postings_dict[current_term]=docID_list
-                        cached_lines.append(current_term)
-#                    print "current_term = ", current_term, " postings : ", postings_dict[current_term]
+                    products_postings_file.write(str(len(docID_list))+" : "+current_term+" : "+' '.join(docID_list)+"\n")
                     #reset current_term, docID_list
                     current_term=term
                     docID_list=[]
                     docID_list.append(docID)
                 else:
                     docID_list.append(docID)
-    #                print "current_term : ", current_term, " docID : ", docID
-                if lineNo%50000==0:
-                    print "processed lineNo ", lineNo, ", len(cached_lines) = ", len(cached_lines), ", len(postings_dict) = ", len(postings_dict)
             print "still alive! iteration = ", iteration
-            print "len(postings_dict) = ", len(postings_dict)
             iteration+=1 
-        pickle.dump(postings_dict, products_postings_file)
 
 
 def gen_human_readable_training_data():
@@ -133,10 +118,10 @@ def gen_human_readable_training_data():
             print
 
 if __name__ == '__main__':
-    os.chdir('/home/shankar/Downloads/TrainingSet')
+#    os.chdir('/home/shankar/Downloads/TrainingSet')
     cwd=os.getcwd()
 #    gen_human_readable_training_data()
-    gen_postings_list()
+    gen_postings_list_from_big_file_sort()
     os.chdir(cwd)
 
 
