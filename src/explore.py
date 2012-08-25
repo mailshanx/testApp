@@ -8,17 +8,26 @@ import json
 import re
 import nltk
 from nltk.stem import PorterStemmer
-from nltk.stem.porter import PorterStemmer
 import subprocess
 import pickle
 from collections import deque
-
+from sets import Set
+import numpy as np
+from copy import copy
+import random
+import sqlite3 as lite
 prod_line_re=re.compile(r"^\s+\".*\",$", re.IGNORECASE)
 au_tag_re=re.compile(r"^\"AU\",$", re.IGNORECASE)
 ce_tag_re=re.compile(r"^\"CE\",$", re.IGNORECASE)
 prod_id_tag_re=re.compile(r"^\s+\".*\":\s*\[\s*$")
 punctuation_chars=[')','(','.',':','=','\\','-','!','/','|']
+unrolled_file_name_suffix='_unrolled_data.txt'
 
+class ProductRecord(object):
+    def __init__(self):
+        self.prodID=None
+        self.prod_description=None
+        self.price=None
 
 def build_term_docID_prodID():
     confirmation=raw_input("are you sure you want to re-build the search index? ")
@@ -58,7 +67,43 @@ def getStemmedProdLine(line):
         return stemmed_prod_line
     pass
 
-
+def build_prod_db():
+    '''
+    puts the product.json file into a database! note that the product descriptions are stemmed
+    '''
+    raw_input("are you sure you want to build the product database again? press Ctrl+C to abort now!!!")
+    products_json_file=open('/home/shankar/Downloads/TrainingSet/products.json')
+    connection=lite.connect('products.db')
+    cursor=connection.cursor()
+    cursor.executescript('''
+    drop table if exists Products;
+    create table Products(ProdID text, prod_description text);
+    ''')
+    connection.commit()
+    record=[]
+    iteration=0
+    while 1:
+        print "iteration ", iteration
+        iteration+=1
+        lines=products_json_file.readlines(10000000)
+        if not lines:
+            break
+        record_list=[]
+        for line in lines:
+            if prod_id_tag_re.search(line):
+                prodID_raw=str(prod_id_tag_re.search(line).group()).strip()
+                prodID=re.sub(r"(\")|(:)|(\[)", " ", prodID_raw).strip()
+                record.append(prodID)
+            stemmed_prod_line=getStemmedProdLine(line)
+            if stemmed_prod_line:
+                record.append(stemmed_prod_line)
+                record_list.append(tuple(record))
+                record=[]
+        record_list=tuple(record_list)
+        cursor.executemany("insert into Products values (?,?)", record_list)
+        connection.commit()
+    connection.close()
+        
 def gen_postings_list_from_big_file_sort():
     '''
     generate the file term_docID_big_file_sorted.txt from this command:
@@ -67,6 +112,7 @@ def gen_postings_list_from_big_file_sort():
     term's frequency, term, followed by docIDs.
     Once you have the postings list, you can sort them by term frequency by:
     python BigFileSorting -b 8000000 -k "-1*int(line.split(\":\")[0]) products_postings.txt postings_sorted_by_freq.txt"
+    Note: total frequency count of all terms = 145783790. If you want normalised term freq, divide by this number.
     '''
     if 'yes'=='yes':
         term_docID_sorted_file=open('term_docID_big_file_sorted.txt','r')
@@ -92,6 +138,69 @@ def gen_postings_list_from_big_file_sort():
             print "still alive! iteration = ", iteration
             iteration+=1 
 
+        
+def gen_unrolled_training_data(input_file):
+    '''
+    unrolls the tokens from text files like training-annotated-text.json. 
+    replacing blank tokens with **
+    '''
+    filename=open(input_file,'r')
+    input_file_prefix=input_file.split("-")[0]
+    unrolled_file_name=input_file_prefix+unrolled_file_name_suffix
+    unrolled_training_data_file=open(unrolled_file_name,'w')
+    raw_text_json=json.load(filename)['TextItem']
+    lineNo=0 
+    offset=0
+    for key, text in raw_text_json.iteritems():
+        offset=0
+        for token in text:
+            if token=='':
+                token='**'
+            record=str(lineNo)+" "+str(offset)+" "+key+" "+token.strip()+"\n"
+            unrolled_training_data_file.write(record)
+            lineNo+=1
+            offset+=1
+
+def read_unrolled_data(unrolled_data_filename):
+    '''
+    reads unrolled data file as a list. Each list element is a tuple (<textID>, <offset>, <lineNo>, <token>)
+    '''
+    unrolled_data=[]
+    print "loading unrolled_data into memory"
+    raw_unrolled_data=open(unrolled_data_filename).readlines()
+    for item in raw_unrolled_data:
+        split_items=map(lambda x:x.strip(), item.split())
+        (textID,offset,lineNo, token)=(split_items[2], int(split_items[1]), int(split_items[0]), split_items[3])
+        unrolled_data.append((textID,offset,lineNo,token))
+    return unrolled_data
+
+def gen_Y_ref():
+    reference_file_name='training_unrolled_data.txt'
+    unrolled_data=read_unrolled_data(unrolled_data_filename=reference_file_name)
+    disambigueated_reference_filename=open('training-disambiguated-product-mentions.120725.csv','r')
+    Y_ref_filename=open('Y_ref.pkl','wb')
+    disambiguated_data=[]
+    Y_ref=np.zeros(len(unrolled_data))
+    index_list=[]
+    print "loading disambiguated data into memory"
+    disambigueated_reference_filename.readline()
+    raw_disambiguation_data=disambigueated_reference_filename.readlines()
+    for item in raw_disambiguation_data:
+        (textID, startOffset, endOffset)=(item.split(",")[0].split(":")[0], int(item.split(",")[0].split(":")[1].split("-")[0]), 
+                                          int(item.split(",")[0].split(":")[1].split("-")[1]))
+        disambiguated_data.append((textID, startOffset, endOffset))
+    print "extracting Y_ref indices"
+    for i in range(len(unrolled_data)):
+        for j in range(len(disambiguated_data)):
+            (textID, startOffset, endOffset)=(disambiguated_data[j][0],disambiguated_data[j][1],disambiguated_data[j][2])
+            if unrolled_data[i][0]==textID and unrolled_data[i][1]>=startOffset and unrolled_data[i][1]<=endOffset:
+                index_list.append(unrolled_data[i][2])
+                break
+    for i in range(len(index_list)):
+        Y_ref[index_list[i]]=1
+    print "pickling Y_ref"
+    pickle.dump(Y_ref, Y_ref_filename)
+    
 
 def gen_human_readable_training_data():
     train_annotate_filename = 'training-annotated-text.json'
@@ -118,13 +227,13 @@ def gen_human_readable_training_data():
             print
 
 if __name__ == '__main__':
+    build_prod_db()
 #    os.chdir('/home/shankar/Downloads/TrainingSet')
-    cwd=os.getcwd()
+#    cwd=os.getcwd()
 #    gen_human_readable_training_data()
-    gen_postings_list_from_big_file_sort()
-    os.chdir(cwd)
+#    gen_postings_list_from_big_file_sort()
+#    gen_unrolled_training_data()
+#    gen_Y_ref()
+#    temp()
+#    os.chdir(cwd)
 
-
-
-
-     
